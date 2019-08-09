@@ -1,23 +1,34 @@
 const bcrypt = require('bcryptjs')
 const PassportStrategy = require('passport-local')
+const LdapStrategy = require('passport-ldapauth')
 
 module.exports = (passport, user) => {
 
   let User = user
   let LocalStrategy = PassportStrategy.Strategy
 
+  // Determines which data of the user object should be stored in the session.
+  // The result of the serializeUser method is attached to the session as
+  // req.session.passport.user = {}
+  // https://stackoverflow.com/questions/27637609
+  // https://hackernoon.com/passportjs-the-confusing-parts-explained-edca874ebead
   passport.serializeUser((user, done) => {
-    done(null, user.id)
+    done(null, user)
   })
 
-  passport.deserializeUser((id, done) => {
-    User.findByPk(id).then((user) => {
-      if (user) {
-        done(null, user.get())
-      } else {
-        done(user.errors, null)
-      }
-    })
+  // The first argument of deserializeUser corresponds to the key of the user
+  // object that was given to the done function.
+  // https://stackoverflow.com/questions/27637609
+  // https://hackernoon.com/passportjs-the-confusing-parts-explained-edca874ebead
+  passport.deserializeUser((user, done) => {
+    // User.findByPk(id).then((user) => {
+    //   if (user) {
+    //     done(null, user.get())
+    //   } else {
+    //     done(user.errors, null)
+    //   }
+    // })
+    done(null, user)
   })
 
   passport.use('local-signup', new LocalStrategy(
@@ -106,4 +117,52 @@ module.exports = (passport, user) => {
       })
     }
   ))
+
+  passport.use('ldap-auth', new LdapStrategy({
+    server: {
+      url: 'ldap://127.0.0.1:389',
+      bindDN: 'CN=admin,OU=neptuneli,DC=neptuneli,DC=com',
+      bindCredentials: 'PasswordHere',
+      searchBase: 'OU=Users,OU=neptuneli,DC=neptuneli,DC=com',
+      searchFilter: '(CN={{username}})'
+    },
+    usernameField: 'email',
+    passwordField: 'password',
+    passReqToCallback: true
+  }, (req, user, done) => {
+
+    if (!user.display_name) {
+      User.findOrCreate({
+        where: {
+          id: user.name.toLocaleUpperCase()
+        },
+        defaults: {
+          id: user.name.toLocaleUpperCase(),
+          display_name: user.displayName,
+          first_name: user.givenName,
+          last_name: user.sn.toLocaleUpperCase(),
+          title: user.title,
+          email: user.mail,
+          email_aliases: user.proxyAddresses.filter((item, index, array) => { return item.toLocaleLowerCase().startsWith('smtp'); }).toString().toLocaleLowerCase().replace(/smtp:/g, ''),
+          department: user.department,
+          company: user.company,
+          joined: user.whenCreated.substring(0, 14),
+          last_login: new Date()
+        }
+      }).then(([records, created]) => {
+
+        if (!created) {
+          records.update({
+            last_login: new Date()
+          })
+        }
+
+        let newUser = records.get({
+          plain: true
+        })
+
+        done(null, newUser)
+      })
+    }
+  }))
 }

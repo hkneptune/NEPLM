@@ -4,9 +4,7 @@ const express = require('express')
 const passport = require('passport')
 const session = require('express-session')
 const bodyParser = require('body-parser')
-
-// LDAP
-const LdapStrategy = require('passport-ldapauth')
+const cookieParser = require('cookie-parser')
 
 // Setting up the port
 const PORT = process.env.PORT || 45675
@@ -14,6 +12,7 @@ const PORT = process.env.PORT || 45675
 // Database Schema
 const models = require('./models')
 require('./config/passport/passport.js')(passport, models.ldap_users)
+
 // Database synchronization
 models.sequelize.sync().then(() => {
   console.log('The database connection is fine!')
@@ -26,6 +25,8 @@ models.sequelize.sync().then(() => {
 const app = express()
 app.use(express.static('public'))
 
+app.use(cookieParser())
+
 // For body parser
 app.use(bodyParser.urlencoded({ extended: true }))
 app.use(bodyParser.json())
@@ -34,56 +35,9 @@ app.use(bodyParser.json())
 app.use(session({
   secret: 'This is a secret used in session',
   resave: true,
-  cookie: { maxAge: 60000 }, // 60 seconds
+  rolling: true,
+  cookie: { maxAge: 10000 }, // 10 seconds
   saveUninitialized: true })) // Session secret
-var getLdapConfiguration = {
-  server: {
-    url: 'ldap://127.0.0.1:389',
-    bindDN: 'CN=admin,OU=neptuneli,DC=neptuneli,DC=com',
-    bindCredentials: 'PasswordHere',
-    searchBase: 'OU=Users,OU=neptuneli,DC=neptuneli,DC=com',
-    searchFilter: '(CN={{username}})'
-  },
-  usernameField: 'email',
-  passwordField: 'password',
-  passReqToCallback: true
-}
-passport.use(new LdapStrategy(getLdapConfiguration, (req, user, done) => {
-
-  if (!user.display_name) {
-    models.ldap_users.findOrCreate({
-      where: {
-        id: user.name.toLocaleUpperCase()
-      },
-      defaults: {
-        id: user.name.toLocaleUpperCase(),
-        display_name: user.displayName,
-        first_name: user.givenName,
-        last_name: user.sn.toLocaleUpperCase(),
-        title: user.title,
-        email: user.mail,
-        email_aliases: user.proxyAddresses.filter((item, index, array) => { return item.toLocaleLowerCase().startsWith('smtp'); }).toString().toLocaleLowerCase().replace(/smtp:/g, ''),
-        department: user.department,
-        company: user.company,
-        joined: user.whenCreated.substring(0, 14),
-        last_login: new Date()
-      }
-    }).then(([records, created]) => {
-
-      if (!created) {
-        records.update({
-          last_login: new Date()
-        })
-      }
-
-      let newUser = records.get({
-        plain: true
-      })
-
-      done(null, newUser)
-    })
-  }
-}))
 
 app.use(passport.initialize())
 app.use(passport.session()) // Persistent login sessions
@@ -120,7 +74,7 @@ app.get('/dashboard', isLoggedIn, (req, res) => {
   res.send(showHomeButton(req.user) + showAuthButtons(req.user) + showUserName(req.user))
 })
 
-app.post('/api/auth/signin', passport.authenticate('ldapauth', {
+app.post('/api/auth/signin', passport.authenticate('ldap-auth', {
   session: true,
   successRedirect: '/dashboard',
   failureRedirect: '/user/login?fail=1'
